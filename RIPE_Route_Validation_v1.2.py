@@ -110,7 +110,7 @@ def update_plots(new_stats, timestamp, time_to_next):
     fig.suptitle('BGP Analysis Dashboard\nAll times in SGT (UTC+8)', fontsize=16, y=0.95)
     
     # Use session state data stores
-    data_stores = st.session_state.data_stores
+    data_stores = st.session_state.data['stores']
     
     # Plot existing data
     bar_width, timeframe_gap, bar_gap = 0.01, 0.02, 0.00
@@ -127,7 +127,7 @@ def update_plots(new_stats, timestamp, time_to_next):
     status_text = (
         f'Last Updated: {timestamp} SGT | '
         f'Next update in: {time_to_next} seconds | '
-        f'Updates: {st.session_state.update_counter}'
+        f'Updates: {st.session_state.data["updates"]}'
     )
     plt.figtext(0.02, 0.02, status_text, ha='left', va='bottom', fontsize=10)
     
@@ -155,56 +155,67 @@ def fetch_and_analyze_bgp():
 
 def main():
     """Main Streamlit application"""
-    st.set_page_config(page_title="BGP Analysis Dashboard", layout="wide")
+    # Page configuration
+    st.set_page_config(
+        page_title="BGP Analysis Dashboard",
+        layout="wide",
+        page_icon="🌐"
+    )
     st.title("BGP Analysis Dashboard")
 
-    # Initialize or get session state
-    if 'init' not in st.session_state:
-        st.session_state.init = True
-        st.session_state.data_stores = {prefix: DataStorage() for prefix in PREFIXES}
-        st.session_state.update_time = get_sgt_time() - timedelta(minutes=2)
-        st.session_state.update_counter = 0
-    
-    # Create placeholder for plots
-    plot_placeholder = st.empty()
-    
-    # Get current time and check if update is needed
-    current_time = get_sgt_time()
-    time_since_last_update = (current_time - st.session_state.update_time).seconds
-    time_to_next = max(0, 120 - time_since_last_update)
+    # Initialize session state
+    if 'data' not in st.session_state:
+        st.session_state.data = {
+            'stores': {prefix: DataStorage() for prefix in PREFIXES},
+            'last_update': get_sgt_time() - timedelta(minutes=2),
+            'updates': 0
+        }
 
-    # Update data if needed
-    if time_since_last_update >= 120:
-        try:
-            with st.spinner('Fetching BGP data...'):
-                all_stats = fetch_and_analyze_bgp()
-                if any(all_stats.values()):
+    # Get current time
+    current_time = get_sgt_time()
+    time_since_update = (current_time - st.session_state.data['last_update']).seconds
+
+    # Create containers
+    status = st.empty()
+    chart = st.empty()
+
+    # Check if update needed
+    if time_since_update >= 120:
+        with st.spinner('Fetching new BGP data...'):
+            try:
+                new_stats = fetch_and_analyze_bgp()
+                if new_stats and any(new_stats.values()):
                     timestamp = current_time.strftime('%H:%M')
                     
-                    # Update data stores
-                    for prefix in PREFIXES:
-                        if all_stats[prefix]:
-                            st.session_state.data_stores[prefix].add_stats(
-                                all_stats[prefix], timestamp
-                            )
+                    # Update data
+                    for prefix, stats in new_stats.items():
+                        if stats:
+                            st.session_state.data['stores'][prefix].add_stats(stats, timestamp)
                     
-                    st.session_state.update_time = current_time
-                    st.session_state.update_counter += 1
+                    st.session_state.data['last_update'] = current_time
+                    st.session_state.data['updates'] += 1
 
-                    # Update display
-                    with plot_placeholder:
-                        update_plots(all_stats, timestamp, 120)
-        except Exception as e:
-            st.error(f"Update failed: {str(e)}")
+                    # Display updated data
+                    with chart:
+                        update_plots(new_stats, timestamp, 120)
+            except Exception as e:
+                st.error(f"Failed to update: {str(e)}")
     else:
-        # Just update the display with existing data
-        with plot_placeholder:
+        # Update display only
+        with chart:
             timestamp = current_time.strftime('%H:%M')
-            update_plots(None, timestamp, time_to_next)
+            update_plots(None, timestamp, 120 - time_since_update)
 
-    # Add auto-refresh using Streamlit's native functionality
-    time.sleep(1)
-    st.rerun()
+    # Update status
+    with status:
+        st.markdown(f"""
+        **Status**: Next update in {120 - time_since_update} seconds  
+        Last updated: {st.session_state.data['last_update'].strftime('%H:%M:%S')} SGT  
+        Total updates: {st.session_state.data['updates']}
+        """)
+
+    # Use Streamlit's native auto-refresh
+    st.empty()
 
 if __name__ == "__main__":
     main()
