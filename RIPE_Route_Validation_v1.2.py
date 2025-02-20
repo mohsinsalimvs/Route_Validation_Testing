@@ -5,6 +5,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import pytz
 import streamlit as st
+import time  # Add this to imports if not present
 
 # Configuration
 PREFIX_CONFIG = {
@@ -101,10 +102,10 @@ def analyze_bgp_data(data, prefix):
 
     return stats
 
-def update_plots(all_stats, timestamp):
+def update_plots(all_stats, timestamp, time_to_next):
     """Update plots for Streamlit"""
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
-    fig.suptitle('BGP Analysis Dashboard\nAll times in SGT (UTC+8)', fontsize=16)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12))  # Increased height
+    fig.suptitle('BGP Analysis Dashboard\nAll times in SGT (UTC+8)', fontsize=16, y=0.95)
     
     bar_width, timeframe_gap, bar_gap = 0.01, 0.02, 0.00
     
@@ -156,7 +157,7 @@ def update_plots(all_stats, timestamp):
                                     fc='gray', hatch=ASN_PATTERNS[asn]['hatch'],
                                     label=ASN_PATTERNS[asn]['label']))
 
-    # Configure plots
+    # Configure plots with adjusted legend placement
     for ax, pattern_handles, title in [
         (ax1, pattern_handles_origin, 'Origin ASN Distribution'),
         (ax2, pattern_handles_upstream, 'Upstream ASN Distribution')
@@ -167,19 +168,20 @@ def update_plots(all_stats, timestamp):
         ax.set_xticklabels(timestamps, rotation=45)
         ax.grid(True, axis='y')
         
+        # Adjust legend placement
         l1 = ax.legend(handles=prefix_handles, title="Prefixes",
-                      bbox_to_anchor=(1.01, 1), loc='upper left')
+                      bbox_to_anchor=(1.15, 1), loc='upper left')
         ax.add_artist(l1)
         ax.legend(handles=pattern_handles, title="ASN Types",
-                 bbox_to_anchor=(1.01, 0.6), loc='upper left')
+                 bbox_to_anchor=(1.15, 0.6), loc='upper left')
 
-        if len(x_positions) > 5:
-            ax.set_xlim(x_positions[-5] - timeframe_gap,
-                       x_positions[-1] + len(PREFIXES) * (bar_width + bar_gap) + timeframe_gap)
-
-    plt.tight_layout(rect=[0, 0.02, 0.85, 0.98])
-    plt.figtext(0.84, 0.02, f'Last Updated: {timestamp}', 
-                ha='right', va='bottom', fontsize=8)
+    # Adjust layout with more space for legends
+    plt.tight_layout(rect=[0, 0.05, 0.85, 0.92])
+    
+    # Add timestamp and next update info
+    plt.figtext(0.02, 0.02, 
+                f'Last Updated: {timestamp} SGT | Next update in: {time_to_next} seconds', 
+                ha='left', va='bottom', fontsize=10)
     
     st.pyplot(fig)
     plt.close('all')
@@ -200,7 +202,7 @@ def fetch_and_analyze_bgp():
             st.error(f"Error analyzing {prefix}: {str(e)}")
             all_stats[prefix] = None
 
-    update_plots(all_stats, timestamp)
+    update_plots(all_stats, timestamp, 0)
     return all_stats
 
 def main():
@@ -208,22 +210,39 @@ def main():
     st.set_page_config(page_title="BGP Analysis Dashboard", layout="wide")
     st.title("BGP Analysis Dashboard")
     
+    # Initialize session state
     if 'data_stores' not in st.session_state:
         st.session_state.data_stores = {prefix: DataStorage() for prefix in PREFIXES}
-        st.session_state.update_time = datetime.now() - timedelta(minutes=2)
+        st.session_state.update_time = get_sgt_time() - timedelta(minutes=2)
+        st.session_state.last_stats = None
     
+    # Use global data_stores
     global data_stores
     data_stores = st.session_state.data_stores
     
-    current_time = datetime.now()
+    # Check timing using SGT
+    current_time = get_sgt_time()
     time_since_last_update = (current_time - st.session_state.update_time).seconds
     
-    if time_since_last_update >= 120:
+    # Fetch data if needed
+    if time_since_last_update >= 120 or st.session_state.last_stats is None:
         with st.spinner('Fetching BGP data...'):
-            fetch_and_analyze_bgp()
+            st.session_state.last_stats = fetch_and_analyze_bgp()
             st.session_state.update_time = current_time
     
-    time_to_next = 120 - time_since_last_update
+    # Calculate time to next update
+    time_to_next = max(0, 120 - time_since_last_update)
+    
+    # Display current data
+    if st.session_state.last_stats:
+        timestamp = current_time.strftime('%H:%M')
+        update_plots(st.session_state.last_stats, timestamp, time_to_next)
+    
+    # Force refresh when timer hits zero
+    if time_to_next <= 1:
+        time.sleep(1)
+        st.experimental_rerun()
+
     st.sidebar.markdown(f"""
         ### Status
         Next update in: {time_to_next} seconds  
