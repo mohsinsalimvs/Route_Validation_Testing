@@ -104,13 +104,19 @@ def analyze_bgp_data(data, prefix):
 
 def update_plots(all_stats, timestamp, time_to_next):
     """Update plots for Streamlit"""
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12))  # Increased height
+    # Ensure we're using global data_stores
+    global data_stores
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12))
     fig.suptitle('BGP Analysis Dashboard\nAll times in SGT (UTC+8)', fontsize=16, y=0.95)
     
-    bar_width, timeframe_gap, bar_gap = 0.01, 0.02, 0.00
+    # Update data stores before plotting
+    if all_stats:  # Only update if we have new stats
+        for prefix in PREFIXES:
+            if all_stats[prefix]:  # Check if stats exist for this prefix
+                data_stores[prefix].add_stats(all_stats[prefix], timestamp)
     
-    for prefix in PREFIXES:
-        data_stores[prefix].add_stats(all_stats[prefix], timestamp)
+    bar_width, timeframe_gap, bar_gap = 0.01, 0.02, 0.00
     
     timestamps = data_stores[PREFIXES[0]].timestamps
     x_positions = np.arange(len(timestamps)) * (len(PREFIXES) * (bar_width + bar_gap) + timeframe_gap)
@@ -210,11 +216,12 @@ def main():
     st.set_page_config(page_title="BGP Analysis Dashboard", layout="wide")
     st.title("BGP Analysis Dashboard")
     
-    # Initialize session state
+    # Initialize session state with better defaults
     if 'data_stores' not in st.session_state:
         st.session_state.data_stores = {prefix: DataStorage() for prefix in PREFIXES}
         st.session_state.update_time = get_sgt_time() - timedelta(minutes=2)
         st.session_state.last_stats = None
+        st.session_state.update_counter = 0  # Add counter to track updates
     
     # Use global data_stores
     global data_stores
@@ -227,8 +234,11 @@ def main():
     # Fetch data if needed
     if time_since_last_update >= 120 or st.session_state.last_stats is None:
         with st.spinner('Fetching BGP data...'):
-            st.session_state.last_stats = fetch_and_analyze_bgp()
-            st.session_state.update_time = current_time
+            new_stats = fetch_and_analyze_bgp()
+            if any(new_stats.values()):  # Check if we got valid data
+                st.session_state.last_stats = new_stats
+                st.session_state.update_time = current_time
+                st.session_state.update_counter += 1
     
     # Calculate time to next update
     time_to_next = max(0, 120 - time_since_last_update)
@@ -237,8 +247,15 @@ def main():
     if st.session_state.last_stats:
         timestamp = current_time.strftime('%H:%M')
         update_plots(st.session_state.last_stats, timestamp, time_to_next)
+        
+        # Add update counter to verify updates are happening
+        st.sidebar.markdown(f"""
+        ### Debug Info
+        Updates: {st.session_state.update_counter}
+        Last Update: {st.session_state.update_time.strftime('%H:%M:%S')} SGT
+        """)
     
-    # Force refresh when timer hits zero using modern Streamlit
+    # Force refresh when timer hits zero
     if time_to_next <= 1:
         time.sleep(1)
         st.rerun()
