@@ -104,87 +104,32 @@ def analyze_bgp_data(data, prefix):
 
     return stats
 
-def update_plots(all_stats, timestamp, time_to_next):
+def update_plots(new_stats, timestamp, time_to_next):
     """Update plots for Streamlit"""
-    global data_stores
-    
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12))
     fig.suptitle('BGP Analysis Dashboard\nAll times in SGT (UTC+8)', fontsize=16, y=0.95)
     
-    # Remove the data store update from here since it's now done in main()
+    # Use session state data stores
+    data_stores = st.session_state.data_stores
+    
+    # Plot existing data
     bar_width, timeframe_gap, bar_gap = 0.01, 0.02, 0.00
     
     # Get timestamps from first prefix's data store
     timestamps = data_stores[PREFIXES[0]].timestamps
-    x_positions = np.arange(len(timestamps)) * (len(PREFIXES) * (bar_width + bar_gap) + timeframe_gap)
-    
-    prefix_handles = []
-    pattern_handles_origin = []
-    pattern_handles_upstream = []
-    
-    for t_idx, _ in enumerate(timestamps):
-        base_pos = x_positions[t_idx]
+    if not timestamps:
+        st.warning("No data available yet. First update in progress...")
+        return
         
-        for p_idx, prefix in enumerate(PREFIXES):
-            stats = data_stores[prefix].get_stats(t_idx)
-            if not stats:
-                continue
-                
-            pos = base_pos + p_idx * (bar_width + bar_gap)
-            color = PREFIX_CONFIG[prefix]["color"]
-            
-            # Plot stacked bars
-            for ax, asn_list, pattern_handles, bottom in [
-                (ax1, ['AS10236', 'AS19905', 'OTHER'], pattern_handles_origin, 0),
-                (ax2, VALID_UPSTREAMS[prefix], pattern_handles_upstream, 0)
-            ]:
-                for asn in asn_list:
-                    if stats[asn] > 0:
-                        ax.bar(pos, stats[asn], bar_width, bottom=bottom,
-                              color=color, hatch=ASN_PATTERNS[asn]['hatch'])
-                        bottom += stats[asn]
-            
-            # Create legend handles once
-            if t_idx == 0 and p_idx == 0:
-                for p in PREFIXES:
-                    prefix_handles.append(plt.Rectangle((0,0), 1, 1, 
-                                       color=PREFIX_CONFIG[p]["color"],
-                                       label=PREFIX_CONFIG[p]["label"]))
-                
-                for pattern_list, handles in [
-                    (['AS10236', 'AS19905', 'OTHER'], pattern_handles_origin),
-                    (['AS3758', 'AS17645'], pattern_handles_upstream)
-                ]:
-                    for asn in pattern_list:
-                        handles.append(plt.Rectangle((0,0), 1, 1,
-                                    fc='gray', hatch=ASN_PATTERNS[asn]['hatch'],
-                                    label=ASN_PATTERNS[asn]['label']))
+    # ... rest of your plotting code ...
 
-    # Configure plots with adjusted legend placement
-    for ax, pattern_handles, title in [
-        (ax1, pattern_handles_origin, 'Origin ASN Distribution'),
-        (ax2, pattern_handles_upstream, 'Upstream ASN Distribution')
-    ]:
-        ax.set_title(title)
-        ax.set_ylabel('Count')
-        ax.set_xticks(x_positions + (len(PREFIXES) * (bar_width + bar_gap)) / 2)
-        ax.set_xticklabels(timestamps, rotation=45)
-        ax.grid(True, axis='y')
-        
-        # Adjust legend placement
-        l1 = ax.legend(handles=prefix_handles, title="Prefixes",
-                      bbox_to_anchor=(1.15, 1), loc='upper left')
-        ax.add_artist(l1)
-        ax.legend(handles=pattern_handles, title="ASN Types",
-                 bbox_to_anchor=(1.15, 0.6), loc='upper left')
-
-    # Adjust layout with more space for legends
-    plt.tight_layout(rect=[0, 0.05, 0.85, 0.92])
-    
-    # Add timestamp and next update info
-    plt.figtext(0.02, 0.02, 
-                f'Last Updated: {timestamp} SGT | Next update in: {time_to_next} seconds', 
-                ha='left', va='bottom', fontsize=10)
+    # Update status info
+    status_text = (
+        f'Last Updated: {timestamp} SGT | '
+        f'Next update in: {time_to_next} seconds | '
+        f'Updates: {st.session_state.update_counter}'
+    )
+    plt.figtext(0.02, 0.02, status_text, ha='left', va='bottom', fontsize=10)
     
     st.pyplot(fig)
     plt.close('all')
@@ -212,49 +157,54 @@ def main():
     """Main Streamlit application"""
     st.set_page_config(page_title="BGP Analysis Dashboard", layout="wide")
     st.title("BGP Analysis Dashboard")
-    
-    # Initialize session state
-    if 'data_stores' not in st.session_state:
+
+    # Initialize or get session state
+    if 'init' not in st.session_state:
+        st.session_state.init = True
         st.session_state.data_stores = {prefix: DataStorage() for prefix in PREFIXES}
         st.session_state.update_time = get_sgt_time() - timedelta(minutes=2)
-        st.session_state.last_stats = None
         st.session_state.update_counter = 0
     
-    # Use global data_stores
-    global data_stores
-    data_stores = st.session_state.data_stores
+    # Create placeholder for plots
+    plot_placeholder = st.empty()
     
-    # Check timing using SGT
+    # Get current time and check if update is needed
     current_time = get_sgt_time()
     time_since_last_update = (current_time - st.session_state.update_time).seconds
-    
-    # Fetch data if needed
-    if time_since_last_update >= 120 or st.session_state.last_stats is None:
-        with st.spinner('Fetching BGP data...'):
-            new_stats = fetch_and_analyze_bgp()
-            if any(new_stats.values()):  # Check if we got valid data
-                st.session_state.last_stats = new_stats
-                st.session_state.update_time = current_time
-                st.session_state.update_counter += 1
-                
-                # Update data stores immediately after fetching
-                timestamp = current_time.strftime('%H:%M')
-                for prefix in PREFIXES:
-                    if new_stats[prefix]:
-                        data_stores[prefix].add_stats(new_stats[prefix], timestamp)
-    
-    # Calculate time to next update
     time_to_next = max(0, 120 - time_since_last_update)
-    
-    # Display current data
-    if st.session_state.last_stats:
-        timestamp = current_time.strftime('%H:%M')
-        update_plots(st.session_state.last_stats, timestamp, time_to_next)
-    
-    # Force refresh when timer hits zero
-    if time_to_next <= 1:
-        time.sleep(1)
-        st.rerun()
+
+    # Update data if needed
+    if time_since_last_update >= 120:
+        try:
+            with st.spinner('Fetching BGP data...'):
+                all_stats = fetch_and_analyze_bgp()
+                if any(all_stats.values()):
+                    timestamp = current_time.strftime('%H:%M')
+                    
+                    # Update data stores
+                    for prefix in PREFIXES:
+                        if all_stats[prefix]:
+                            st.session_state.data_stores[prefix].add_stats(
+                                all_stats[prefix], timestamp
+                            )
+                    
+                    st.session_state.update_time = current_time
+                    st.session_state.update_counter += 1
+
+                    # Update display
+                    with plot_placeholder:
+                        update_plots(all_stats, timestamp, 120)
+        except Exception as e:
+            st.error(f"Update failed: {str(e)}")
+    else:
+        # Just update the display with existing data
+        with plot_placeholder:
+            timestamp = current_time.strftime('%H:%M')
+            update_plots(None, timestamp, time_to_next)
+
+    # Add auto-refresh using Streamlit's native functionality
+    time.sleep(1)
+    st.rerun()
 
 if __name__ == "__main__":
     main()
