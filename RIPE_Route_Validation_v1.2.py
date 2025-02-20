@@ -238,16 +238,10 @@ def main():
         timestamp = current_time.strftime('%H:%M')
         update_plots(st.session_state.last_stats, timestamp, time_to_next)
     
-    # Force refresh when timer hits zero
+    # Force refresh when timer hits zero using modern Streamlit
     if time_to_next <= 1:
         time.sleep(1)
-        st.experimental_rerun()
-
-    st.sidebar.markdown(f"""
-        ### Status
-        Next update in: {time_to_next} seconds  
-        Last updated: {st.session_state.update_time.strftime('%Y-%m-%d %H:%M:%S')} SGT
-    """)
+        st.rerun()
 
 if __name__ == "__main__":
     main()
