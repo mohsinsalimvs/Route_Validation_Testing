@@ -43,12 +43,14 @@ class DataStorage:
         self.stats_history = []
         
     def add_stats(self, stats, timestamp):
-        self.timestamps.append(timestamp)
-        self.stats_history.append(stats)
-        
-        if len(self.timestamps) > self.max_points:
-            self.timestamps.pop(0)
-            self.stats_history.pop(0)
+        # Only add if timestamp is different from last one
+        if not self.timestamps or timestamp != self.timestamps[-1]:
+            self.timestamps.append(timestamp)
+            self.stats_history.append(stats)
+            
+            if len(self.timestamps) > self.max_points:
+                self.timestamps.pop(0)
+                self.stats_history.pop(0)
             
     def get_stats(self, index):
         if 0 <= index < len(self.stats_history):
@@ -104,20 +106,15 @@ def analyze_bgp_data(data, prefix):
 
 def update_plots(all_stats, timestamp, time_to_next):
     """Update plots for Streamlit"""
-    # Ensure we're using global data_stores
     global data_stores
     
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12))
     fig.suptitle('BGP Analysis Dashboard\nAll times in SGT (UTC+8)', fontsize=16, y=0.95)
     
-    # Update data stores before plotting
-    if all_stats:  # Only update if we have new stats
-        for prefix in PREFIXES:
-            if all_stats[prefix]:  # Check if stats exist for this prefix
-                data_stores[prefix].add_stats(all_stats[prefix], timestamp)
-    
+    # Remove the data store update from here since it's now done in main()
     bar_width, timeframe_gap, bar_gap = 0.01, 0.02, 0.00
     
+    # Get timestamps from first prefix's data store
     timestamps = data_stores[PREFIXES[0]].timestamps
     x_positions = np.arange(len(timestamps)) * (len(PREFIXES) * (bar_width + bar_gap) + timeframe_gap)
     
@@ -216,12 +213,12 @@ def main():
     st.set_page_config(page_title="BGP Analysis Dashboard", layout="wide")
     st.title("BGP Analysis Dashboard")
     
-    # Initialize session state with better defaults
+    # Initialize session state
     if 'data_stores' not in st.session_state:
         st.session_state.data_stores = {prefix: DataStorage() for prefix in PREFIXES}
         st.session_state.update_time = get_sgt_time() - timedelta(minutes=2)
         st.session_state.last_stats = None
-        st.session_state.update_counter = 0  # Add counter to track updates
+        st.session_state.update_counter = 0
     
     # Use global data_stores
     global data_stores
@@ -239,6 +236,12 @@ def main():
                 st.session_state.last_stats = new_stats
                 st.session_state.update_time = current_time
                 st.session_state.update_counter += 1
+                
+                # Update data stores immediately after fetching
+                timestamp = current_time.strftime('%H:%M')
+                for prefix in PREFIXES:
+                    if new_stats[prefix]:
+                        data_stores[prefix].add_stats(new_stats[prefix], timestamp)
     
     # Calculate time to next update
     time_to_next = max(0, 120 - time_since_last_update)
@@ -247,13 +250,6 @@ def main():
     if st.session_state.last_stats:
         timestamp = current_time.strftime('%H:%M')
         update_plots(st.session_state.last_stats, timestamp, time_to_next)
-        
-        # Add update counter to verify updates are happening
-        st.sidebar.markdown(f"""
-        ### Debug Info
-        Updates: {st.session_state.update_counter}
-        Last Update: {st.session_state.update_time.strftime('%H:%M:%S')} SGT
-        """)
     
     # Force refresh when timer hits zero
     if time_to_next <= 1:
