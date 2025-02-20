@@ -155,67 +155,80 @@ def fetch_and_analyze_bgp():
 
 def main():
     """Main Streamlit application"""
-    # Page configuration
+    # Configure page
     st.set_page_config(
         page_title="BGP Analysis Dashboard",
         layout="wide",
-        page_icon="🌐"
+        page_icon="🌐",
+        menu_items={
+            'Get Help': None,
+            'Report a bug': None,
+            'About': "BGP Analysis Dashboard v1.2"
+        }
     )
+    
+    # Title and description
     st.title("BGP Analysis Dashboard")
+    st.markdown("*Monitoring BGP routes in real-time (Updates every 2 minutes)*")
 
     # Initialize session state
-    if 'data' not in st.session_state:
-        st.session_state.data = {
-            'stores': {prefix: DataStorage() for prefix in PREFIXES},
-            'last_update': get_sgt_time() - timedelta(minutes=2),
-            'updates': 0
-        }
-
-    # Get current time
+    if 'init' not in st.session_state:
+        st.session_state.init = True
+        st.session_state.data_stores = {prefix: DataStorage() for prefix in PREFIXES}
+        st.session_state.last_update = get_sgt_time() - timedelta(minutes=2)
+        st.session_state.update_count = 0
+        st.session_state.error = None
+    
+    # Create placeholders
+    error_placeholder = st.empty()
+    chart_placeholder = st.empty()
+    info_placeholder = st.empty()
+    
+    # Check update timing
     current_time = get_sgt_time()
-    time_since_update = (current_time - st.session_state.data['last_update']).seconds
-
-    # Create containers
-    status = st.empty()
-    chart = st.empty()
-
-    # Check if update needed
+    time_since_update = (current_time - st.session_state.last_update).seconds
+    
+    # Update data if needed
     if time_since_update >= 120:
-        with st.spinner('Fetching new BGP data...'):
+        with st.spinner('Fetching BGP data...'):
             try:
                 new_stats = fetch_and_analyze_bgp()
                 if new_stats and any(new_stats.values()):
                     timestamp = current_time.strftime('%H:%M')
                     
-                    # Update data
+                    # Update data stores
                     for prefix, stats in new_stats.items():
                         if stats:
-                            st.session_state.data['stores'][prefix].add_stats(stats, timestamp)
+                            st.session_state.data_stores[prefix].add_stats(stats, timestamp)
                     
-                    st.session_state.data['last_update'] = current_time
-                    st.session_state.data['updates'] += 1
-
+                    st.session_state.last_update = current_time
+                    st.session_state.update_count += 1
+                    st.session_state.error = None
+                    
                     # Display updated data
-                    with chart:
+                    with chart_placeholder:
                         update_plots(new_stats, timestamp, 120)
             except Exception as e:
-                st.error(f"Failed to update: {str(e)}")
-    else:
-        # Update display only
-        with chart:
-            timestamp = current_time.strftime('%H:%M')
-            update_plots(None, timestamp, 120 - time_since_update)
+                st.session_state.error = str(e)
+    
+    # Display current state
+    time_to_next = max(0, 120 - time_since_update)
+    
+    # Show any errors
+    if st.session_state.error:
+        error_placeholder.error(f"Error: {st.session_state.error}")
+    
+    # Update info display
+    info_placeholder.markdown(f"""
+        **Last Update**: {st.session_state.last_update.strftime('%H:%M:%S')} SGT  
+        **Next Update**: in {time_to_next} seconds  
+        **Total Updates**: {st.session_state.update_count}
+    """)
 
-    # Update status
-    with status:
-        st.markdown(f"""
-        **Status**: Next update in {120 - time_since_update} seconds  
-        Last updated: {st.session_state.data['last_update'].strftime('%H:%M:%S')} SGT  
-        Total updates: {st.session_state.data['updates']}
-        """)
-
-    # Use Streamlit's native auto-refresh
-    st.empty()
+    # Force refresh at 2-minute mark
+    if time_to_next <= 1:
+        time.sleep(1)
+        st.rerun()
 
 if __name__ == "__main__":
     main()

@@ -10,7 +10,12 @@ maxUploadSize = 200
 maxMessageSize = 200
 enableXsrfProtection = true
 enableCORS = false
+runOnSave = true
 
 [client]
 toolbarMode = "minimal"
 showErrorDetails = false
+
+[browser]
+serverAddress = "streamlit.app"
+gatherUsageStats = false
